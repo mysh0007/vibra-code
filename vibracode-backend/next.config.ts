@@ -14,6 +14,16 @@ const nextConfig: NextConfig = {
       bodySizeLimit: '50mb',
     },
   },
+  // حل مشكلة وحدات Node في الـ Middleware والـ Edge
+  webpack: (config, { isServer }) => {
+    if (!isServer) {
+      config.resolve.fallback = {
+        ...config.resolve.fallback,
+        crypto: false,
+      };
+    }
+    return config;
+  },
 };
 
 export default nextConfig;
