@@ -1,6 +1,5 @@
 "use server";
 
-import { getServerSession } from "next-auth";
 import { fetchMutation, fetchQuery } from "convex/nextjs";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
@@ -9,7 +8,12 @@ import { inngest } from "@/lib/inngest";
 import { auth } from "@clerk/nextjs/server";
 
 /**
- * Check if user has GitHub connected (checks Convex)
+ * ============================================================
+ * Check GitHub connection
+ * ============================================================
+ *
+ * Checks whether the currently authenticated Clerk user
+ * has GitHub credentials stored in Convex.
  */
 export async function checkGitHubConnection(): Promise<{
   isConnected: boolean;
@@ -18,106 +22,203 @@ export async function checkGitHubConnection(): Promise<{
 }> {
   try {
     const { userId } = await auth();
+
     if (!userId) {
-      return { isConnected: false, error: "Not authenticated" };
+      return {
+        isConnected: false,
+        error: "Not authenticated",
+      };
     }
 
-    // Check Convex for stored credentials
-    const creds = await fetchQuery(api.github.getByClerkId, { clerkId: userId });
+    // Get stored GitHub credentials from Convex
+    const creds = await fetchQuery(api.github.getByClerkId, {
+      clerkId: userId,
+    });
 
-    if (!creds) {
-      return { isConnected: false };
+    if (!creds?.accessToken) {
+      return {
+        isConnected: false,
+      };
     }
 
-    // Verify token is still valid by fetching user info
+    // Verify GitHub token
     try {
-      const octokit = new Octokit({ auth: creds.accessToken });
-      const { data: user } = await octokit.rest.users.getAuthenticated();
+      const octokit = new Octokit({
+        auth: creds.accessToken,
+      });
+
+      const { data: githubUser } =
+        await octokit.rest.users.getAuthenticated();
 
       return {
         isConnected: true,
-        username: user.login,
+        username: githubUser.login,
       };
     } catch (error) {
-      // Token expired or invalid - remove from Convex
-      await fetchMutation(api.github.remove, { clerkId: userId });
-      return { isConnected: false, error: "GitHub token expired. Please reconnect." };
+      console.error(
+        "GitHub token validation failed:",
+        error
+      );
+
+      // Token is invalid/expired
+      try {
+        await fetchMutation(api.github.remove, {
+          clerkId: userId,
+        });
+      } catch (removeError) {
+        console.error(
+          "Failed to remove invalid GitHub credentials:",
+          removeError
+        );
+      }
+
+      return {
+        isConnected: false,
+        error:
+          "GitHub token expired or is invalid. Please reconnect GitHub.",
+      };
     }
   } catch (error) {
-    console.error("GitHub connection check error:", error);
+    console.error(
+      "GitHub connection check error:",
+      error
+    );
+
     return {
       isConnected: false,
-      error: error instanceof Error ? error.message : "Failed to check GitHub connection",
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to check GitHub connection",
     };
   }
 }
 
 /**
- * Save GitHub credentials after OAuth callback
+ * ============================================================
+ * Save GitHub credentials
+ * ============================================================
+ *
+ * IMPORTANT:
+ * This function no longer uses NextAuth.
+ *
+ * The GitHub access token must be supplied by the GitHub
+ * OAuth flow and then saved here.
  */
-export async function saveGitHubCredentials(): Promise<{
+export async function saveGitHubCredentials({
+  accessToken,
+}: {
+  accessToken: string;
+}): Promise<{
   success: boolean;
   username?: string;
   error?: string;
 }> {
   try {
     const { userId } = await auth();
+
     if (!userId) {
-      return { success: false, error: "Not authenticated with Clerk" };
+      return {
+        success: false,
+        error: "Not authenticated with Clerk",
+      };
     }
 
-    const session = await getServerSession(authOptions);
-    if (!session?.accessToken || session?.provider !== "github") {
-      return { success: false, error: "GitHub not connected via OAuth" };
+    if (!accessToken) {
+      return {
+        success: false,
+        error: "GitHub access token is required",
+      };
     }
 
-    // Get GitHub username
-    const octokit = new Octokit({ auth: session.accessToken });
-    const { data: user } = await octokit.rest.users.getAuthenticated();
+    // Verify token with GitHub
+    const octokit = new Octokit({
+      auth: accessToken,
+    });
 
-    // Save to Convex
+    const { data: githubUser } =
+      await octokit.rest.users.getAuthenticated();
+
+    // Save credentials to Convex
     await fetchMutation(api.github.upsert, {
       clerkId: userId,
-      accessToken: session.accessToken,
-      username: user.login,
+      accessToken,
+      username: githubUser.login,
     });
 
     return {
       success: true,
-      username: user.login,
+      username: githubUser.login,
     };
-  } catch (error) {
-    console.error("Save GitHub credentials error:", error);
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : "Failed to save credentials",
-    };
-  }
-}
+  } catch (error: any) {
+    console.error(
+      "Save GitHub credentials error:",
+      error
+    );
 
-/**
- * Disconnect GitHub (remove credentials from Convex)
- */
-export async function disconnectGitHub(): Promise<{ success: boolean; error?: string }> {
-  try {
-    const { userId } = await auth();
-    if (!userId) {
-      return { success: false, error: "Not authenticated" };
+    if (error?.status === 401) {
+      return {
+        success: false,
+        error: "Invalid GitHub access token",
+      };
     }
 
-    await fetchMutation(api.github.remove, { clerkId: userId });
-    return { success: true };
-  } catch (error) {
-    console.error("Disconnect GitHub error:", error);
     return {
       success: false,
-      error: error instanceof Error ? error.message : "Failed to disconnect",
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to save GitHub credentials",
     };
   }
 }
 
 /**
- * Create a new GitHub repository
+ * ============================================================
+ * Disconnect GitHub
+ * ============================================================
+ */
+export async function disconnectGitHub(): Promise<{
+  success: boolean;
+  error?: string;
+}> {
+  try {
+    const { userId } = await auth();
+
+    if (!userId) {
+      return {
+        success: false,
+        error: "Not authenticated",
+      };
+    }
+
+    await fetchMutation(api.github.remove, {
+      clerkId: userId,
+    });
+
+    return {
+      success: true,
+    };
+  } catch (error) {
+    console.error(
+      "Disconnect GitHub error:",
+      error
+    );
+
+    return {
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to disconnect GitHub",
+    };
+  }
+}
+
+/**
+ * ============================================================
+ * Create GitHub repository
+ * ============================================================
  */
 export async function createGitHubRepo({
   repoName,
@@ -133,25 +234,59 @@ export async function createGitHubRepo({
 }> {
   try {
     const { userId } = await auth();
+
     if (!userId) {
-      return { success: false, error: "Not authenticated" };
+      return {
+        success: false,
+        error: "Not authenticated",
+      };
     }
 
-    // Get token from Convex
-    const creds = await fetchQuery(api.github.getByClerkId, { clerkId: userId });
+    // Get GitHub credentials from Convex
+    const creds = await fetchQuery(
+      api.github.getByClerkId,
+      {
+        clerkId: userId,
+      }
+    );
+
     if (!creds?.accessToken) {
-      return { success: false, error: "GitHub not connected" };
+      return {
+        success: false,
+        error:
+          "GitHub is not connected. Please connect your GitHub account first.",
+      };
     }
 
-    const octokit = new Octokit({ auth: creds.accessToken });
+    // Clean repository name
+    const cleanRepoName = repoName
+      .trim()
+      .replace(/[^a-zA-Z0-9._-]/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "")
+      .substring(0, 100);
 
-    // Create the repository
-    const { data: repo } = await octokit.rest.repos.createForAuthenticatedUser({
-      name: repoName,
-      private: isPrivate,
-      auto_init: false,
-      description: "Created with vibe0 - AI Mobile App Builder",
+    if (!cleanRepoName) {
+      return {
+        success: false,
+        error: "Invalid repository name",
+      };
+    }
+
+    const octokit = new Octokit({
+      auth: creds.accessToken,
     });
+
+    const { data: repo } =
+      await octokit.rest.repos.createForAuthenticatedUser(
+        {
+          name: cleanRepoName,
+          private: isPrivate,
+          auto_init: false,
+          description:
+            "Created with VibraCoder - AI Mobile App Builder",
+        }
+      );
 
     return {
       success: true,
@@ -159,24 +294,48 @@ export async function createGitHubRepo({
       repositoryUrl: repo.html_url,
     };
   } catch (error: any) {
-    console.error("Create repo error:", error);
+    console.error(
+      "Create GitHub repository error:",
+      error
+    );
 
-    if (error.status === 422) {
-      return { success: false, error: "Repository name already exists" };
+    if (error?.status === 401) {
+      return {
+        success: false,
+        error:
+          "GitHub token expired or is invalid. Please reconnect GitHub.",
+      };
     }
-    if (error.status === 401) {
-      return { success: false, error: "GitHub token expired. Please reconnect." };
+
+    if (error?.status === 403) {
+      return {
+        success: false,
+        error:
+          "GitHub denied permission to create repositories. Please check your GitHub permissions.",
+      };
+    }
+
+    if (error?.status === 422) {
+      return {
+        success: false,
+        error:
+          "Repository name already exists or is invalid.",
+      };
     }
 
     return {
       success: false,
-      error: error.message || "Failed to create repository",
+      error:
+        error?.message ||
+        "Failed to create GitHub repository",
     };
   }
 }
 
 /**
- * Create a new GitHub repository and trigger initial push
+ * ============================================================
+ * Create repository + trigger initial push
+ * ============================================================
  */
 export async function createAndPushToGitHub({
   sessionId,
@@ -196,14 +355,28 @@ export async function createAndPushToGitHub({
 }> {
   try {
     const { userId } = await auth();
+
     if (!userId) {
-      return { success: false, error: "Not authenticated" };
+      return {
+        success: false,
+        error: "Not authenticated",
+      };
     }
 
-    // Check GitHub is connected
-    const creds = await fetchQuery(api.github.getByClerkId, { clerkId: userId });
+    // Make sure GitHub is connected
+    const creds = await fetchQuery(
+      api.github.getByClerkId,
+      {
+        clerkId: userId,
+      }
+    );
+
     if (!creds?.accessToken) {
-      return { success: false, error: "GitHub not connected. Please connect your GitHub account." };
+      return {
+        success: false,
+        error:
+          "GitHub is not connected. Please connect your GitHub account.",
+      };
     }
 
     // Update session status
@@ -213,73 +386,107 @@ export async function createAndPushToGitHub({
       githubPushStatus: "in_progress",
     });
 
-    // Create the repository
-    const repoResult = await createGitHubRepo({ repoName, isPrivate });
+    // Create repository
+    const repoResult =
+      await createGitHubRepo({
+        repoName,
+        isPrivate,
+      });
 
-    if (!repoResult.success || !repoResult.repository) {
+    if (
+      !repoResult.success ||
+      !repoResult.repository
+    ) {
       await fetchMutation(api.sessions.update, {
         id: convexId,
         status: "PUSH_FAILED",
         githubPushStatus: "failed",
       });
+
       return repoResult;
     }
 
-    // Update session with repo info
+    // Save repository information
     await fetchMutation(api.sessions.update, {
       id: convexId,
-      githubRepository: repoResult.repository,
-      githubRepositoryUrl: repoResult.repositoryUrl,
+      githubRepository:
+        repoResult.repository,
+      githubRepositoryUrl:
+        repoResult.repositoryUrl,
       status: "INITIALIZING_GIT",
     });
 
-    // Trigger Inngest job for the push operation
-    // Token will be fetched from Convex in the Inngest function
+    // Trigger Inngest push job
     await inngest.send({
       name: "vibracode/push.github",
       data: {
         sessionId,
         convexId,
-        repository: repoResult.repository,
+        repository:
+          repoResult.repository,
         isInitialPush: true,
       },
     });
 
     return {
       success: true,
-      repository: repoResult.repository,
-      repositoryUrl: repoResult.repositoryUrl,
+      repository:
+        repoResult.repository,
+      repositoryUrl:
+        repoResult.repositoryUrl,
     };
   } catch (error) {
-    console.error("Create and push error:", error);
+    console.error(
+      "Create and push to GitHub error:",
+      error
+    );
 
-    await fetchMutation(api.sessions.update, {
-      id: convexId,
-      status: "PUSH_FAILED",
-      githubPushStatus: "failed",
-    });
+    try {
+      await fetchMutation(api.sessions.update, {
+        id: convexId,
+        status: "PUSH_FAILED",
+        githubPushStatus: "failed",
+      });
+    } catch (updateError) {
+      console.error(
+        "Failed to update session after GitHub error:",
+        updateError
+      );
+    }
 
     return {
       success: false,
-      error: error instanceof Error ? error.message : "Failed to create repository",
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to create repository and push to GitHub",
     };
   }
 }
 
 /**
- * Generate a repository name from session name
+ * ============================================================
+ * Generate repository name
+ * ============================================================
  */
-export async function generateRepoName(sessionName: string): Promise<string> {
-  return sessionName
+export async function generateRepoName(
+  sessionName: string
+): Promise<string> {
+  const name = sessionName
     .toLowerCase()
+    .trim()
     .replace(/[^a-z0-9-]/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "")
-    .substring(0, 100) || "vibe0-app";
+    .substring(0, 100);
+
+  return name || "vibra-app";
 }
 
 /**
- * Retry pushing to GitHub (for failed pushes)
+ * ============================================================
+ * Retry GitHub push
+ * ============================================================
  */
 export async function retryGitHubPush({
   sessionId,
@@ -295,14 +502,28 @@ export async function retryGitHubPush({
 }> {
   try {
     const { userId } = await auth();
+
     if (!userId) {
-      return { success: false, error: "Not authenticated" };
+      return {
+        success: false,
+        error: "Not authenticated",
+      };
     }
 
-    // Check GitHub is connected
-    const creds = await fetchQuery(api.github.getByClerkId, { clerkId: userId });
+    // Verify GitHub connection
+    const creds = await fetchQuery(
+      api.github.getByClerkId,
+      {
+        clerkId: userId,
+      }
+    );
+
     if (!creds?.accessToken) {
-      return { success: false, error: "GitHub not connected. Please reconnect." };
+      return {
+        success: false,
+        error:
+          "GitHub is not connected. Please reconnect GitHub.",
+      };
     }
 
     // Update session status
@@ -312,7 +533,7 @@ export async function retryGitHubPush({
       githubPushStatus: "in_progress",
     });
 
-    // Trigger Inngest job for the push operation
+    // Trigger Inngest
     await inngest.send({
       name: "vibracode/push.github",
       data: {
@@ -323,31 +544,48 @@ export async function retryGitHubPush({
       },
     });
 
-    return { success: true };
+    return {
+      success: true,
+    };
   } catch (error) {
-    console.error("Retry push error:", error);
+    console.error(
+      "Retry GitHub push error:",
+      error
+    );
+
     return {
       success: false,
-      error: error instanceof Error ? error.message : "Failed to retry push",
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to retry GitHub push",
     };
   }
 }
 
 /**
- * Clear session's GitHub repository (allows pushing to a new repo)
+ * ============================================================
+ * Clear session GitHub repository
+ * ============================================================
  */
 export async function clearSessionGitHub({
   convexId,
 }: {
   convexId: Id<"sessions">;
-}): Promise<{ success: boolean; error?: string }> {
+}): Promise<{
+  success: boolean;
+  error?: string;
+}> {
   try {
     const { userId } = await auth();
+
     if (!userId) {
-      return { success: false, error: "Not authenticated" };
+      return {
+        success: false,
+        error: "Not authenticated",
+      };
     }
 
-    // Clear GitHub fields from session (empty strings clear the values)
     await fetchMutation(api.sessions.update, {
       id: convexId,
       githubRepository: "",
@@ -355,12 +593,21 @@ export async function clearSessionGitHub({
       githubPushStatus: "pending",
     });
 
-    return { success: true };
+    return {
+      success: true,
+    };
   } catch (error) {
-    console.error("Clear session GitHub error:", error);
+    console.error(
+      "Clear session GitHub error:",
+      error
+    );
+
     return {
       success: false,
-      error: error instanceof Error ? error.message : "Failed to clear GitHub",
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to clear GitHub repository",
     };
   }
 }
