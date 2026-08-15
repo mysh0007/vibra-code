@@ -1,7 +1,0 @@
-/build/
-/test-results/
-/playwright-report/
-/playwright/.cache/
-
-# Include fully vendored canary modules
-!/static/canary-full/node_modules
