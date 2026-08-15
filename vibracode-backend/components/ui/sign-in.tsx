@@ -467,57 +467,56 @@ export const SignInPage: React.FC<SignInPageProps> = ({
   // OAUTH
   // ============================================================
 
-  const handleOAuthSignIn = async (
-    provider: "google" | "github" | "apple"
-  ) => {
-    if (isLoading) return;
+const handleOAuthSignIn = async (
+  provider: "google" | "github" | "apple"
+) => {
+  if (!signInLoaded || !signIn) {
+    setError(
+      "Authentication is still loading. Please try again."
+    );
+    return;
+  }
 
-    if (!signInLoaded || !signIn) {
-      setError("Authentication is still loading.");
-      return;
-    }
+  if (userLoaded && user) {
+    setError(
+      "You are already signed in. Please refresh the page."
+    );
+    return;
+  }
 
-    if (userLoaded && user) {
-      setError("You are already signed in.");
-      return;
-    }
+  if (isLoading) return;
 
-    setIsLoading(true);
-    setError("");
+  setIsLoading(true);
+  setError("");
 
-    try {
-      const strategy =
-        `oauth_${provider}` as
-          | "oauth_google"
-          | "oauth_github"
-          | "oauth_apple";
+  try {
+    const strategy =
+      `oauth_${provider}` as
+        | "oauth_google"
+        | "oauth_github"
+        | "oauth_apple";
 
-      await signIn.authenticateWithRedirect({
-        strategy,
+    await signIn.authenticateWithRedirect({
+      strategy,
+      redirectUrl: "/sso-callback",
+      redirectUrlComplete: "/",
+    });
+  } catch (err: any) {
+    console.error(
+      `${provider} OAuth error:`,
+      err
+    );
 
-        // IMPORTANT:
-        // OAuth provider returns here first.
-        redirectUrl: "/sso-callback",
+    setError(
+      getClerkError(
+        err,
+        `${provider} sign-in failed.`
+      )
+    );
 
-        // Then Clerk sends the user here.
-        redirectUrlComplete: "/",
-      });
-    } catch (err: any) {
-      console.error(
-        `${provider.toUpperCase()} OAUTH ERROR:`,
-        err
-      );
-
-      setError(
-        getClerkError(
-          err,
-          `${provider} sign-in failed.`
-        )
-      );
-
-      setIsLoading(false);
-    }
-  };
+    setIsLoading(false);
+  }
+};
 
   // ============================================================
   // CLOSED
