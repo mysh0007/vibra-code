@@ -47,7 +47,7 @@
     "form-data": "^4.0.5",
     "framer-motion": "^12.23.24",
     "gsap": "^3.13.0",
-"inngest": "^3.54.0"
+    "inngest": "^3.54.0",
     "jsonwebtoken": "^9.0.2",
     "lucide-react": "^0.523.0",
     "motion": "^12.23.24",
