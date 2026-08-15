@@ -1,21 +1,20 @@
-import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
+import { clerkMiddleware } from '@clerk/nextjs/server'
 import { NextResponse } from 'next/server'
 
-const isProtectedRoute = createRouteMatcher(['/session(.*)'])
-
-const isPublicApiRoute = createRouteMatcher([
-  '/api/webhooks(.*)',
-  '/api/preview-proxy(.*)',
-  '/api/auth(.*)',
-])
-
 export default clerkMiddleware(async (auth, req) => {
-  // Skip Clerk entirely for public API routes
-  if (isPublicApiRoute(req)) {
+  const pathname = req.nextUrl.pathname
+
+  // Public API routes - skip Clerk protection
+  if (
+    pathname.startsWith('/api/webhooks') ||
+    pathname.startsWith('/api/preview-proxy') ||
+    pathname.startsWith('/api/auth')
+  ) {
     return NextResponse.next()
   }
 
-  if (isProtectedRoute(req)) {
+  // Protect /session and everything under it
+  if (pathname.startsWith('/session')) {
     await auth.protect()
   }
 })
