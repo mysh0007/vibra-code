@@ -2,11 +2,7 @@
 
 import React, { useState } from "react";
 import { Eye, EyeOff, ArrowLeft } from "lucide-react";
-import {
-  useSignIn,
-  useSignUp,
-  useUser,
-} from "@clerk/nextjs";
+import { useSignIn, useSignUp, useUser } from "@clerk/nextjs";
 
 // ============================================================
 // ICONS
@@ -80,7 +76,7 @@ interface SignInPageProps {
 }
 
 // ============================================================
-// GLASS INPUT
+// INPUT
 // ============================================================
 
 const GlassInputWrapper = ({
@@ -110,21 +106,13 @@ const TestimonialCard = ({
     <img
       src={testimonial.avatarSrc}
       className="h-8 w-8 object-cover rounded-xl"
-      alt="avatar"
+      alt=""
     />
 
     <div className="text-xs leading-snug">
-      <p className="flex items-center gap-1 font-medium text-white">
-        {testimonial.name}
-      </p>
-
-      <p className="text-white/60">
-        {testimonial.handle}
-      </p>
-
-      <p className="mt-1 text-white/80">
-        {testimonial.text}
-      </p>
+      <p className="font-medium text-white">{testimonial.name}</p>
+      <p className="text-white/60">{testimonial.handle}</p>
+      <p className="mt-1 text-white/80">{testimonial.text}</p>
     </div>
   </div>
 );
@@ -156,10 +144,7 @@ export const SignInPage: React.FC<SignInPageProps> = ({
   const [isSignUp, setIsSignUp] = useState(false);
   const [isVerifyingEmail, setIsVerifyingEmail] = useState(false);
 
-  const {
-    signIn,
-    isLoaded: signInLoaded,
-  } = useSignIn();
+  const { signIn, isLoaded: signInLoaded } = useSignIn();
 
   const {
     signUp,
@@ -167,28 +152,133 @@ export const SignInPage: React.FC<SignInPageProps> = ({
     isLoaded: signUpLoaded,
   } = useSignUp();
 
-  const {
-    user,
-    isLoaded: userLoaded,
-  } = useUser();
-
-  // ============================================================
-  // HELPERS
-  // ============================================================
+  const { user, isLoaded: userLoaded } = useUser();
 
   const normalizedEmail = email.trim().toLowerCase();
 
-  const getClerkError = (err: any, fallback: string) => {
+  // ============================================================
+  // ERROR PARSER
+  // ============================================================
+
+  const getClerkError = (
+    err: any,
+    fallback: string
+  ): string => {
+    const clerkError = err?.errors?.[0];
+
     return (
-      err?.errors?.[0]?.longMessage ||
-      err?.errors?.[0]?.message ||
+      clerkError?.longMessage ||
+      clerkError?.message ||
+      err?.longMessage ||
       err?.message ||
       fallback
     );
   };
 
   // ============================================================
-  // SIGN UP / SIGN IN
+  // SIGN UP
+  // ============================================================
+
+  const handleSignUp = async () => {
+    if (!signUpLoaded || !signUp) {
+      setError("Authentication is still loading. Please try again.");
+      return;
+    }
+
+    const result = await signUp.create({
+      emailAddress: normalizedEmail,
+      password,
+    });
+
+    console.log("SIGN UP:", {
+      status: result.status,
+      createdSessionId: result.createdSessionId,
+      missingFields: result.missingFields,
+      unverifiedFields: result.unverifiedFields,
+    });
+
+    // Account is already complete
+    if (result.status === "complete") {
+      if (result.createdSessionId) {
+        await setSignUpActive({
+          session: result.createdSessionId,
+        });
+      }
+
+      onClose?.();
+      window.location.href = "/";
+      return;
+    }
+
+    // Email needs verification
+    if (
+      result.unverifiedFields?.includes("email_address") ||
+      result.status === "missing_requirements"
+    ) {
+      await signUp.prepareEmailAddressVerification({
+        strategy: "email_code",
+      });
+
+      setIsVerifyingEmail(true);
+      setVerificationCode("");
+      setError("");
+
+      return;
+    }
+
+    // Other requirements
+    if (result.status !== "complete") {
+      const missing =
+        result.missingFields?.join(", ") ||
+        "additional information";
+
+      setError(
+        `Your account requires additional information: ${missing}`
+      );
+
+      return;
+    }
+  };
+
+  // ============================================================
+  // SIGN IN
+  // ============================================================
+
+  const handleSignIn = async () => {
+    if (!signInLoaded || !signIn) {
+      setError("Authentication is still loading. Please try again.");
+      return;
+    }
+
+    const result = await signIn.create({
+      identifier: normalizedEmail,
+      password,
+    });
+
+    console.log("SIGN IN:", {
+      status: result.status,
+      createdSessionId: result.createdSessionId,
+    });
+
+    if (result.status === "complete") {
+      if (result.createdSessionId) {
+        await signIn.setActive({
+          session: result.createdSessionId,
+        });
+      }
+
+      onClose?.();
+      window.location.href = "/";
+      return;
+    }
+
+    setError(
+      "Sign in requires an additional verification step."
+    );
+  };
+
+  // ============================================================
+  // FORM
   // ============================================================
 
   const handleFormSubmit = async (
@@ -204,9 +294,7 @@ export const SignInPage: React.FC<SignInPageProps> = ({
     }
 
     if (userLoaded && user) {
-      setError(
-        "You are already signed in. Please refresh the page."
-      );
+      setError("You are already signed in.");
       return;
     }
 
@@ -214,117 +302,13 @@ export const SignInPage: React.FC<SignInPageProps> = ({
     setError("");
 
     try {
-      // ========================================================
-      // SIGN UP
-      // ========================================================
-
       if (isSignUp) {
-        if (!signUpLoaded || !signUp) {
-          setError(
-            "Authentication is still loading. Please try again."
-          );
-          return;
-        }
-
-        const result = await signUp.create({
-          emailAddress: normalizedEmail,
-          password,
-        });
-
-        console.log(
-          "Clerk sign-up result:",
-          result.status,
-          result.createdSessionId
-        );
-
-        // ------------------------------------------------------
-        // ACCOUNT CREATED WITHOUT VERIFICATION
-        // ------------------------------------------------------
-
-        if (result.status === "complete") {
-          if (result.createdSessionId) {
-            await setSignUpActive({
-              session: result.createdSessionId,
-            });
-          }
-
-          setIsVerifyingEmail(false);
-          setVerificationCode("");
-          setError("");
-
-          onClose?.();
-
-          window.location.href = "/";
-
-          return;
-        }
-
-        // ------------------------------------------------------
-        // EMAIL VERIFICATION REQUIRED
-        // ------------------------------------------------------
-
-        await signUp.prepareEmailAddressVerification({
-          strategy: "email_code",
-        });
-
-        setVerificationCode("");
-        setIsVerifyingEmail(true);
-        setError("");
-
-        return;
+        await handleSignUp();
+      } else {
+        await handleSignIn();
       }
-
-      // ========================================================
-      // SIGN IN
-      // ========================================================
-
-      if (!signInLoaded || !signIn) {
-        setError(
-          "Authentication is still loading. Please try again."
-        );
-        return;
-      }
-
-      const result = await signIn.create({
-        identifier: normalizedEmail,
-        password,
-      });
-
-      console.log(
-        "Clerk sign-in result:",
-        result.status,
-        result.createdSessionId
-      );
-
-      // ------------------------------------------------------
-      // LOGIN SUCCESS
-      // ------------------------------------------------------
-
-      if (result.status === "complete") {
-        if (result.createdSessionId) {
-          await signIn.setActive({
-            session: result.createdSessionId,
-          });
-        }
-
-        setError("");
-
-        onClose?.();
-
-        window.location.href = "/";
-
-        return;
-      }
-
-      // ------------------------------------------------------
-      // ADDITIONAL VERIFICATION
-      // ------------------------------------------------------
-
-      setError(
-        "Additional verification is required to complete sign in."
-      );
     } catch (err: any) {
-      console.error("Clerk authentication error:", err);
+      console.error("AUTH ERROR:", err);
 
       setError(
         getClerkError(
@@ -348,26 +332,19 @@ export const SignInPage: React.FC<SignInPageProps> = ({
   ) => {
     e.preventDefault();
 
+    if (isLoading) return;
+
     const code = verificationCode.trim();
 
-    if (!code) {
-      setError("Please enter the verification code.");
-      return;
-    }
-
-    if (code.length !== 6) {
-      setError("The verification code must contain 6 digits.");
+    if (!/^\d{6}$/.test(code)) {
+      setError("Please enter the 6-digit verification code.");
       return;
     }
 
     if (!signUpLoaded || !signUp) {
-      setError(
-        "Authentication is still loading. Please try again."
-      );
+      setError("Authentication is still loading.");
       return;
     }
-
-    if (isLoading) return;
 
     setIsLoading(true);
     setError("");
@@ -378,20 +355,21 @@ export const SignInPage: React.FC<SignInPageProps> = ({
           code,
         });
 
-      console.log(
-        "Clerk verification result:",
-        result.status,
-        result.createdSessionId
-      );
+      console.log("EMAIL VERIFICATION:", {
+        status: result.status,
+        createdSessionId: result.createdSessionId,
+        missingFields: result.missingFields,
+        unverifiedFields: result.unverifiedFields,
+      });
 
       // ========================================================
-      // VERIFICATION SUCCESS
+      // THIS IS THE ONLY SUCCESS CONDITION
       // ========================================================
 
       if (result.status === "complete") {
         if (!result.createdSessionId) {
           throw new Error(
-            "Email verified, but Clerk did not return a session."
+            "Email verified, but Clerk did not create a session."
           );
         }
 
@@ -399,39 +377,33 @@ export const SignInPage: React.FC<SignInPageProps> = ({
           session: result.createdSessionId,
         });
 
-        setVerificationCode("");
         setIsVerifyingEmail(false);
+        setVerificationCode("");
         setError("");
 
-        // Give Clerk a moment to update the client session
         await new Promise((resolve) =>
-          setTimeout(resolve, 300)
+          setTimeout(resolve, 500)
         );
 
         onClose?.();
-
         window.location.href = "/";
 
         return;
       }
 
       // ========================================================
-      // VERIFIED BUT OTHER CLERK REQUIREMENTS REMAIN
+      // CODE VALID BUT REQUIREMENTS STILL MISSING
       // ========================================================
 
-      console.log(
-        "Verification incomplete:",
-        result
-      );
+      const missing =
+        result.missingFields?.join(", ") ||
+        "additional information";
 
       setError(
-        "Email code was accepted, but your account still has additional requirements. Please try again or contact the administrator."
+        `The verification code is correct, but Clerk still requires: ${missing}.`
       );
     } catch (err: any) {
-      console.error(
-        "Email verification error:",
-        err
-      );
+      console.error("VERIFICATION ERROR:", err);
 
       setError(
         getClerkError(
@@ -445,18 +417,16 @@ export const SignInPage: React.FC<SignInPageProps> = ({
   };
 
   // ============================================================
-  // RESEND CODE
+  // RESEND
   // ============================================================
 
   const handleResendCode = async () => {
+    if (isLoading) return;
+
     if (!signUpLoaded || !signUp) {
-      setError(
-        "Authentication is still loading. Please try again."
-      );
+      setError("Authentication is still loading.");
       return;
     }
-
-    if (isLoading) return;
 
     setIsLoading(true);
     setError("");
@@ -467,13 +437,8 @@ export const SignInPage: React.FC<SignInPageProps> = ({
       });
 
       setVerificationCode("");
-
-      setError("");
     } catch (err: any) {
-      console.error(
-        "Resend verification error:",
-        err
-      );
+      console.error("RESEND ERROR:", err);
 
       setError(
         getClerkError(
@@ -487,7 +452,7 @@ export const SignInPage: React.FC<SignInPageProps> = ({
   };
 
   // ============================================================
-  // BACK FROM VERIFICATION
+  // BACK
   // ============================================================
 
   const handleBackFromVerification = () => {
@@ -505,34 +470,41 @@ export const SignInPage: React.FC<SignInPageProps> = ({
   const handleOAuthSignIn = async (
     provider: "google" | "github" | "apple"
   ) => {
+    if (isLoading) return;
+
     if (!signInLoaded || !signIn) {
-      setError(
-        "Authentication is still loading. Please try again."
-      );
+      setError("Authentication is still loading.");
       return;
     }
 
     if (userLoaded && user) {
-      setError(
-        "You are already signed in. Please refresh the page."
-      );
+      setError("You are already signed in.");
       return;
     }
-
-    if (isLoading) return;
 
     setIsLoading(true);
     setError("");
 
     try {
+      const strategy =
+        `oauth_${provider}` as
+          | "oauth_google"
+          | "oauth_github"
+          | "oauth_apple";
+
       await signIn.authenticateWithRedirect({
-        strategy: `oauth_${provider}`,
-        redirectUrl: "/",
+        strategy,
+
+        // IMPORTANT:
+        // OAuth provider returns here first.
+        redirectUrl: "/sso-callback",
+
+        // Then Clerk sends the user here.
         redirectUrlComplete: "/",
       });
     } catch (err: any) {
       console.error(
-        `${provider} OAuth error:`,
+        `${provider.toUpperCase()} OAUTH ERROR:`,
         err
       );
 
@@ -555,12 +527,7 @@ export const SignInPage: React.FC<SignInPageProps> = ({
     return null;
   }
 
-  // ============================================================
-  // ALREADY SIGNED IN
-  // ============================================================
-
   if (userLoaded && user) {
-    onClose?.();
     return null;
   }
 
@@ -572,7 +539,7 @@ export const SignInPage: React.FC<SignInPageProps> = ({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
       <div className="relative bg-[rgba(15,15,20,0.95)] backdrop-blur-xl rounded-2xl shadow-2xl max-w-4xl w-full max-h-[85vh] overflow-hidden border border-white/10">
 
-        {/* CLOSE BUTTON */}
+        {/* CLOSE */}
 
         <button
           type="button"
@@ -604,33 +571,27 @@ export const SignInPage: React.FC<SignInPageProps> = ({
           <section className="flex-1 flex items-center justify-center p-6 overflow-y-auto">
             <div className="w-full max-w-sm">
 
-              {/* ==================================================
-                  VERIFICATION
-              ================================================== */}
+              {/* VERIFICATION */}
 
               {isVerifyingEmail ? (
                 <div className="flex flex-col gap-5">
-
-                  {/* BACK */}
 
                   <button
                     type="button"
                     onClick={handleBackFromVerification}
                     disabled={isLoading}
-                    className="flex items-center gap-2 text-white/60 hover:text-white text-sm transition-colors w-fit disabled:opacity-50"
+                    className="flex items-center gap-2 text-white/60 hover:text-white text-sm w-fit"
                   >
                     <ArrowLeft className="w-4 h-4" />
                     Back
                   </button>
 
-                  {/* TITLE */}
-
                   <div className="text-center">
-                    <h1 className="text-3xl md:text-4xl font-semibold leading-tight text-white">
+                    <h1 className="text-3xl md:text-4xl font-semibold text-white">
                       Verify your email
                     </h1>
 
-                    <p className="mt-3 text-white/60 text-sm leading-relaxed">
+                    <p className="mt-3 text-white/60 text-sm">
                       We sent a verification code to
                     </p>
 
@@ -639,15 +600,11 @@ export const SignInPage: React.FC<SignInPageProps> = ({
                     </p>
                   </div>
 
-                  {/* ERROR */}
-
                   {error && (
                     <div className="text-red-400 text-sm text-center bg-red-500/10 border border-red-500/20 rounded-lg p-3">
                       {error}
                     </div>
                   )}
-
-                  {/* FORM */}
 
                   <form
                     onSubmit={handleVerifyEmail}
@@ -688,15 +645,13 @@ export const SignInPage: React.FC<SignInPageProps> = ({
                         isLoading ||
                         verificationCode.length !== 6
                       }
-                      className="w-full rounded-2xl bg-[#1f3dbc] py-3 font-medium text-white hover:bg-[#1f3dbc]/90 transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="w-full rounded-2xl bg-[#1f3dbc] py-3 font-medium text-white hover:bg-[#1f3dbc]/90 transition-colors text-sm disabled:opacity-50"
                     >
                       {isLoading
                         ? "Verifying..."
                         : "Verify Email"}
                     </button>
                   </form>
-
-                  {/* RESEND */}
 
                   <div className="text-center">
                     <p className="text-xs text-white/50 mb-2">
@@ -707,55 +662,45 @@ export const SignInPage: React.FC<SignInPageProps> = ({
                       type="button"
                       onClick={handleResendCode}
                       disabled={isLoading}
-                      className="text-sm text-[#4d6be8] hover:text-[#6b84ed] hover:underline transition-colors disabled:opacity-50"
+                      className="text-sm text-[#4d6be8] hover:text-[#6b84ed] hover:underline disabled:opacity-50"
                     >
                       {isLoading
                         ? "Sending..."
                         : "Resend Code"}
                     </button>
                   </div>
-
                 </div>
               ) : (
-
                 /* ==================================================
-                   NORMAL LOGIN / SIGN UP
+                   LOGIN / SIGN UP
                 ================================================== */
 
                 <div className="flex flex-col gap-4">
 
-                  {/* TITLE */}
-
-                  <h1 className="animate-element animate-delay-100 text-3xl md:text-4xl font-semibold leading-tight text-white">
-                    {isSignUp
-                      ? "Create Account"
-                      : "Welcome"}
+                  <h1 className="text-3xl md:text-4xl font-semibold text-white">
+                    {isSignUp ? "Create Account" : title}
                   </h1>
 
-                  <p className="animate-element animate-delay-200 text-white/60 text-sm">
+                  <p className="text-white/60 text-sm">
                     {isSignUp
                       ? "Join our platform and start building amazing things"
-                      : "Access your account and continue your journey with us"}
+                      : description}
                   </p>
-
-                  {/* FORM */}
 
                   <form
                     onSubmit={handleFormSubmit}
-                    className="animate-element animate-delay-300 flex flex-col gap-4"
+                    className="flex flex-col gap-4"
                   >
 
-                    {/* ERROR */}
-
                     {error && (
-                      <div className="animate-element animate-delay-400 text-red-400 text-sm text-center bg-red-500/10 border border-red-500/20 rounded-lg p-2">
+                      <div className="text-red-400 text-sm text-center bg-red-500/10 border border-red-500/20 rounded-lg p-3">
                         {error}
                       </div>
                     )}
 
                     {/* EMAIL */}
 
-                    <div className="animate-element animate-delay-500">
+                    <div>
                       <label className="text-xs font-medium text-white/70">
                         Email Address
                       </label>
@@ -782,14 +727,13 @@ export const SignInPage: React.FC<SignInPageProps> = ({
 
                     {/* PASSWORD */}
 
-                    <div className="animate-element animate-delay-600">
+                    <div>
                       <label className="text-xs font-medium text-white/70">
                         Password
                       </label>
 
                       <GlassInputWrapper>
                         <div className="relative">
-
                           <input
                             type={
                               showPassword
@@ -798,9 +742,7 @@ export const SignInPage: React.FC<SignInPageProps> = ({
                             }
                             value={password}
                             onChange={(e) => {
-                              setPassword(
-                                e.target.value
-                              );
+                              setPassword(e.target.value);
                               setError("");
                             }}
                             placeholder="Enter your password"
@@ -816,30 +758,22 @@ export const SignInPage: React.FC<SignInPageProps> = ({
                           <button
                             type="button"
                             onClick={() =>
-                              setShowPassword(
-                                !showPassword
-                              )
+                              setShowPassword(!showPassword)
                             }
                             className="absolute inset-y-0 right-2 flex items-center"
                           >
                             {showPassword ? (
-                              <EyeOff className="w-4 h-4 text-white/60 hover:text-white transition-colors" />
+                              <EyeOff className="w-4 h-4 text-white/60" />
                             ) : (
-                              <Eye className="w-4 h-4 text-white/60 hover:text-white transition-colors" />
+                              <Eye className="w-4 h-4 text-white/60" />
                             )}
                           </button>
-
                         </div>
                       </GlassInputWrapper>
                     </div>
 
-                    {/* CLERK CAPTCHA */}
-
                     {isSignUp && (
-                      <div
-                        id="clerk-captcha"
-                        className="animate-element animate-delay-650"
-                      />
+                      <div id="clerk-captcha" />
                     )}
 
                     {/* SUBMIT */}
@@ -851,7 +785,7 @@ export const SignInPage: React.FC<SignInPageProps> = ({
                         !normalizedEmail ||
                         !password
                       }
-                      className="animate-element animate-delay-700 w-full rounded-2xl bg-[#1f3dbc] py-3 font-medium text-white hover:bg-[#1f3dbc]/90 transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="w-full rounded-2xl bg-[#1f3dbc] py-3 font-medium text-white hover:bg-[#1f3dbc]/90 transition-colors text-sm disabled:opacity-50"
                     >
                       {isLoading
                         ? isSignUp
@@ -864,7 +798,7 @@ export const SignInPage: React.FC<SignInPageProps> = ({
 
                     {/* DIVIDER */}
 
-                    <div className="animate-element animate-delay-800 relative flex items-center justify-center">
+                    <div className="relative flex items-center justify-center">
                       <span className="w-full border-t border-white/10" />
 
                       <span className="px-3 text-xs text-white/60 bg-[rgba(15,15,20,0.95)] absolute">
@@ -872,64 +806,51 @@ export const SignInPage: React.FC<SignInPageProps> = ({
                       </span>
                     </div>
 
-                    {/* OAUTH */}
+                    {/* GOOGLE */}
 
-                    <div className="animate-element animate-delay-900 flex flex-col gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleOAuthSignIn("google")
+                      }
+                      disabled={isLoading}
+                      className="w-full flex items-center justify-center gap-2 border border-white/10 rounded-2xl py-3 hover:bg-white/5 text-sm text-white disabled:opacity-50"
+                    >
+                      <GoogleIcon />
+                      Continue with Google
+                    </button>
 
-                      {/* GOOGLE */}
+                    {/* GITHUB */}
 
-                      <button
-                        type="button"
-                        onClick={() =>
-                          handleOAuthSignIn(
-                            "google"
-                          )
-                        }
-                        disabled={isLoading}
-                        className="w-full flex items-center justify-center gap-2 border border-white/10 rounded-2xl py-3 hover:bg-white/5 transition-colors text-sm text-white disabled:opacity-50"
-                      >
-                        <GoogleIcon />
-                        Continue with Google
-                      </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleOAuthSignIn("github")
+                      }
+                      disabled={isLoading}
+                      className="w-full flex items-center justify-center gap-2 border border-white/10 rounded-2xl py-3 hover:bg-white/5 text-sm text-white disabled:opacity-50"
+                    >
+                      <GitHubIcon />
+                      Continue with GitHub
+                    </button>
 
-                      {/* GITHUB */}
+                    {/* APPLE */}
 
-                      <button
-                        type="button"
-                        onClick={() =>
-                          handleOAuthSignIn(
-                            "github"
-                          )
-                        }
-                        disabled={isLoading}
-                        className="w-full flex items-center justify-center gap-2 border border-white/10 rounded-2xl py-3 hover:bg-white/5 transition-colors text-sm text-white disabled:opacity-50"
-                      >
-                        <GitHubIcon />
-                        Continue with GitHub
-                      </button>
-
-                      {/* APPLE */}
-
-                      <button
-                        type="button"
-                        onClick={() =>
-                          handleOAuthSignIn(
-                            "apple"
-                          )
-                        }
-                        disabled={isLoading}
-                        className="w-full flex items-center justify-center gap-2 border border-white/10 rounded-2xl py-3 hover:bg-white/5 transition-colors text-sm text-white disabled:opacity-50"
-                      >
-                        <AppleIcon />
-                        Continue with Apple
-                      </button>
-
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleOAuthSignIn("apple")
+                      }
+                      disabled={isLoading}
+                      className="w-full flex items-center justify-center gap-2 border border-white/10 rounded-2xl py-3 hover:bg-white/5 text-sm text-white disabled:opacity-50"
+                    >
+                      <AppleIcon />
+                      Continue with Apple
+                    </button>
 
                     {/* SWITCH */}
 
-                    <p className="animate-element animate-delay-1000 text-center text-xs text-white/60">
-
+                    <p className="text-center text-xs text-white/60">
                       {isSignUp
                         ? "Already have an account?"
                         : "New to our platform?"}
@@ -937,41 +858,38 @@ export const SignInPage: React.FC<SignInPageProps> = ({
                       <button
                         type="button"
                         onClick={() => {
-                          setIsSignUp(
-                            !isSignUp
-                          );
+                          setIsSignUp(!isSignUp);
                           setError("");
                           setEmail("");
                           setPassword("");
                           setVerificationCode("");
                           setIsVerifyingEmail(false);
                         }}
-                        className="text-[#1f3dbc] hover:underline transition-colors ml-1"
+                        className="text-[#1f3dbc] hover:underline ml-1"
                       >
                         {isSignUp
                           ? "Sign In"
                           : "Create Account"}
                       </button>
-
                     </p>
-
                   </form>
                 </div>
               )}
-
             </div>
           </section>
 
           {/* ==================================================
-              RIGHT SIDE
+              RIGHT
           ================================================== */}
 
           <section className="hidden md:block flex-1 relative p-3">
-
             <div
-              className="animate-slide-right animate-delay-300 absolute inset-3 rounded-2xl bg-cover bg-center"
+              className="absolute inset-3 rounded-2xl bg-cover bg-center"
               style={{
-                backgroundImage: `url(/brand-assets/05F8029C-1DD1-40AD-97D8-29954B629E25.png)`,
+                backgroundImage: `url(${
+                  heroImageSrc ||
+                  "/brand-assets/05F8029C-1DD1-40AD-97D8-29954B629E25.png"
+                })`,
               }}
             />
 
@@ -979,7 +897,6 @@ export const SignInPage: React.FC<SignInPageProps> = ({
 
             {testimonials.length > 0 && (
               <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-2 px-4 w-full justify-center z-10">
-
                 <TestimonialCard
                   testimonial={testimonials[0]}
                   delay="animate-delay-1000"
@@ -988,9 +905,7 @@ export const SignInPage: React.FC<SignInPageProps> = ({
                 {testimonials[1] && (
                   <div className="hidden xl:flex">
                     <TestimonialCard
-                      testimonial={
-                        testimonials[1]
-                      }
+                      testimonial={testimonials[1]}
                       delay="animate-delay-1200"
                     />
                   </div>
@@ -999,19 +914,14 @@ export const SignInPage: React.FC<SignInPageProps> = ({
                 {testimonials[2] && (
                   <div className="hidden 2xl:flex">
                     <TestimonialCard
-                      testimonial={
-                        testimonials[2]
-                      }
+                      testimonial={testimonials[2]}
                       delay="animate-delay-1400"
                     />
                   </div>
                 )}
-
               </div>
             )}
-
           </section>
-
         </div>
       </div>
     </div>
