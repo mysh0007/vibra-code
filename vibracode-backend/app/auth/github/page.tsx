@@ -2,28 +2,30 @@
 
 import { useEffect, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { signIn, useSession } from "next-auth/react";
+import { useUser } from "@clerk/nextjs";
 import { saveGitHubCredentials } from "@/app/actions/github-push";
 import { Loader2 } from "lucide-react";
 
 function GitHubAuthContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { data: session, status } = useSession();
+  const { user, isLoaded } = useUser();
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   const callbackUrl = searchParams.get("callbackUrl") || "/";
 
   useEffect(() => {
-    // If not authenticated with NextAuth, trigger GitHub OAuth
-    if (status === "unauthenticated") {
-      signIn("github", { callbackUrl: `/auth/github?callbackUrl=${encodeURIComponent(callbackUrl)}` });
+    if (!isLoaded) return;
+
+    // إذا لم يكن المستخدم مسجل دخول عبر Clerk، توجيهه لتسجيل الدخول
+    if (!user) {
+      router.push(`/sign-in?redirect_url=${encodeURIComponent(window.location.href)}`);
       return;
     }
 
-    // If authenticated, save credentials to Convex
-    if (status === "authenticated" && session?.accessToken && !saving) {
+    // حفظ بيانات الاعتماد
+    if (user && !saving) {
       setSaving(true);
       saveGitHubCredentials()
         .then((result) => {
@@ -37,7 +39,7 @@ function GitHubAuthContent() {
           setError(err.message || "Failed to save GitHub credentials");
         });
     }
-  }, [status, session, callbackUrl, router, saving]);
+  }, [isLoaded, user, callbackUrl, router, saving]);
 
   if (error) {
     return (
@@ -56,14 +58,14 @@ function GitHubAuthContent() {
     );
   }
 
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-background">
-      <div className="text-center space-y-4">
-        <Loader2 className="h-8 w-8 animate-spin mx-auto" />
-        <p className="text-muted-foreground">Connecting to GitHub...</p>
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="text-center space-y-4">
+          <Loader2 className="h-8 w-8 animate-spin mx-auto" />
+          <p className="text-muted-foreground">Connecting to GitHub & Setting up environment...</p>
+        </div>
       </div>
-    </div>
-  );
+    );
 }
 
 export default function GitHubAuthPage() {
